@@ -4,10 +4,11 @@ import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
+# === CONFIG ===
 BOT_TOKEN = "8685653597:AAHscWTwMRCY93q9qQlAM3EKGTE27Sx36Tc"
 API_URL = "https://sher-osint-india-num-info.vercel.app/api?number={}"
 
-# Database
+# === DATABASE ===
 def init_db():
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
@@ -43,6 +44,7 @@ def update_credits(user_id, amount):
     conn.commit()
     conn.close()
 
+# === COMMANDS ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     add_user(user.id, user.username)
@@ -53,8 +55,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("👤 Profile", callback_data="profile")]
     ]
     
+    credits = user_data[2] if user_data else 10
     await update.message.reply_text(
-        f"✅ Welcome {user.first_name}!\n\n💀 NUM INFO BOT\n💳 Credits: {user_data[2] if user_data else 10}",
+        f"✅ Welcome {user.first_name}!\n\n"
+        f"💀 NUM INFO BOT\n"
+        f"💳 Credits: {credits}\n\n"
+        f"Select an option:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -63,21 +69,23 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = get_user(user_id)
     
     if not user_data or user_data[2] <= 0:
-        await update.message.reply_text("❌ Insufficient credits!")
+        await update.message.reply_text("❌ Insufficient credits! Contact @Mohtdader90")
         return
     
     query = " ".join(context.args)
     if not query:
-        await update.message.reply_text("❌ /search 9876543210")
+        await update.message.reply_text("❌ Usage: /search 9876543210")
         return
     
+    # Deduct credit
     update_credits(user_id, -1)
     
+    # Search API
     try:
-        response = requests.get(API_URL.format(query), timeout=10)
+        response = requests.get(API_URL.format(query), timeout=15)
         data = response.json()
-    except:
-        await update.message.reply_text("⚠️ API Error")
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ API Error: {str(e)[:50]}")
         update_credits(user_id, 1)
         return
     
@@ -87,7 +95,21 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     details = data.get("number_detail", {})
-    msg = f"📞 Number: {query}\n👤 Name: {details.get('name', 'N/A')}\n📡 Operator: {details.get('operator', 'N/A')}\n💳 Credits Left: {user_data[2] - 1}"
+    user_data = get_user(user_id)
+    
+    msg = (
+        f"📞 **Number:** {query}\n"
+        f"👤 **Name:** {details.get('name', 'N/A')}\n"
+        f"📧 **Email:** {details.get('email', 'N/A')}\n"
+        f"👨‍👦 **Father:** {details.get('father_name', 'N/A')}\n"
+        f"📡 **Operator:** {details.get('operator', 'N/A')}\n"
+        f"🌐 **Circle:** {details.get('circle', 'N/A')}\n"
+        f"📍 **Address:** {details.get('full_address', 'N/A')}\n"
+        f"🏙️ **City:** {details.get('village_city', 'N/A')}\n"
+        f"📮 **Pincode:** {details.get('pincode', 'N/A')}\n"
+        f"🗺️ **State:** {details.get('state', 'N/A')}\n"
+        f"\n💳 **Credits Left:** {user_data[2] if user_data else 0}"
+    )
     
     await update.message.reply_text(msg)
 
@@ -96,11 +118,23 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     if query.data == "search":
-        await query.edit_message_text("Send: /search 9876543210")
+        await query.edit_message_text(
+            "🔍 **Search Number**\n\n"
+            "Send number like:\n"
+            "/search 9876543210"
+        )
     elif query.data == "profile":
         user_data = get_user(query.from_user.id)
         if user_data:
-            await query.edit_message_text(f"👤 Profile\nCredits: {user_data[2]}")
+            await query.edit_message_text(
+                f"👤 **Your Profile**\n\n"
+                f"🆔 ID: `{user_data[0]}`\n"
+                f"👤 Username: @{user_data[1] or 'N/A'}\n"
+                f"💳 Credits: {user_data[2]}\n"
+                f"📅 Joined: Active"
+            )
+        else:
+            await query.edit_message_text("❌ User not found!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -108,6 +142,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.args = [text]
         await search_command(update, context)
 
+# === MAIN ===
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -115,7 +150,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print("🔥 Bot is running...")
+    print("🔥 Bot is running successfully!")
     app.run_polling()
 
 if __name__ == "__main__":
