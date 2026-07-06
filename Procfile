@@ -1,1 +1,1 @@
-worker: python numbot.py
+web: python Numbot.py
