@@ -1,27 +1,18 @@
-# numbot_advanced.py - Markdown Fixed
+# Numbot.py - Render Version
 import requests
-import json
 import sqlite3
 import datetime
 import re
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
 # === CONFIG ===
 BOT_TOKEN = "8685653597:AAHscWTwMRCY93q9qQlAM3EKGTE27Sx36Tc"
 API_URL = "https://sher-osint-india-num-info.vercel.app/api?number={}"
-OWNER_IDS = [5546171977, 8781746926]  # Multiple owners
-SUPPORT_USERNAME = "@Mohtdader90"
-DEVELOPER_USERNAME = "@AloneDigital"
+OWNER_IDS = [5546171977, 8781746926]
 
-# === ESCAPE FUNCTION ===
-def escape_markdown(text):
-    if not text:
-        return "N/A"
-    escape_chars = r'_*[]()~`>#+-=|{}.!'
-    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', str(text))
-
-# === DATABASE SETUP ===
+# === DATABASE ===
 def init_db():
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
@@ -29,12 +20,150 @@ def init_db():
         user_id INTEGER PRIMARY KEY,
         username TEXT,
         first_name TEXT,
-        verified INTEGER DEFAULT 0,
-        credits INTEGER DEFAULT 0,
+        verified INTEGER DEFAULT 1,
+        credits INTEGER DEFAULT 10,
         total_searches INTEGER DEFAULT 0,
         join_date TEXT
     )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS pending_users (
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def get_user(user_id):
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+    user = c.fetchone()
+    conn.close()
+    return user
+
+def add_user(user_id, username, first_name):
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO users (user_id, username, first_name, join_date) VALUES (?, ?, ?, ?)",
+              (user_id, username or "NoUsername", first_name or "User", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    conn.commit()
+    conn.close()
+
+def update_credits(user_id, amount):
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    c.execute("UPDATE users SET credits = credits + ? WHERE user_id = ?", (amount, user_id))
+    conn.commit()
+    conn.close()
+
+def is_owner(user_id):
+    return user_id in OWNER_IDS
+
+def escape(text):
+    if not text:
+        return "N/A"
+    return str(text).replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]')
+
+# === COMMANDS ===
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    add_user(user.id, user.username, user.first_name)
+    user_data = get_user(user.id)
+    
+    keyboard = [
+        [InlineKeyboardButton("🔍 Search", callback_data="search")],
+        [InlineKeyboardButton("👤 Profile", callback_data="profile")],
+        [InlineKeyboardButton("📞 Support", callback_data="support")]
+    ]
+    
+    await update.message.reply_text(
+        f"✅ Welcome {user.first_name}!\n\n"
+        f"💀 NUM INFO BOT\n"
+        f"💳 Credits: {user_data[4] if user_data else 10}\n\n"
+        f"Select an option:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_data = get_user(user_id)
+    
+    if user_data[4] <= 0:
+        await update.message.reply_text("❌ Insufficient credits!")
+        return
+    
+    query = " ".join(context.args)
+    if not query:
+        await update.message.reply_text("❌ Send number: /search 9876543210")
+        return
+    
+    update_credits(user_id, -1)
+    
+    try:
+        response = requests.get(API_URL.format(query), timeout=30)
+        data = response.json()
+    except:
+        await update.message.reply_text("⚠️ API Error. Try again later.")
+        update_credits(user_id, 1)
+        return
+    
+    if not data.get("success"):
+        await update.message.reply_text("❌ Number not found!")
+        update_credits(user_id, 1)
+        return
+    
+    details = data.get("number_detail", {})
+    msg = (
+        f"📞 Number: {query}\n"
+        f"👤 Name: {escape(details.get('name', 'N/A'))}\n"
+        f"📧 Email: {escape(details.get('email', 'N/A'))}\n"
+        f"📡 Operator: {escape(details.get('operator', 'N/A'))}\n"
+        f"📍 Address: {escape(details.get('full_address', 'N/A'))}\n"
+        f"🏙️ City: {escape(details.get('village_city', 'N/A'))}\n"
+        f"💳 Credits Left: {user_data[4] - 1}"
+    )
+    
+    await update.message.reply_text(msg)
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    
+    if data == "search":
+        await query.edit_message_text("Send number: /search 9876543210")
+    elif data == "profile":
+        user_data = get_user(query.from_user.id)
+        await query.edit_message_text(
+            f"👤 Profile\n"
+            f"ID: {user_data[0]}\n"
+            f"Name: {user_data[2]}\n"
+            f"Credits: {user_data[4]}\n"
+            f"Searches: {user_data[5]}"
+        )
+    elif data == "support":
+        await query.edit_message_text("📞 Support: @Mohtdader90")
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if text.isdigit() and len(text) == 10:
+        context.args = [text]
+        await search_command(update, context)
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print(f"Error: {context.error}")
+
+# === MAIN ===
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("search", search_command))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_error_handler(error_handler)
+    
+    print("🔥 Bot is running...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()    c.execute('''CREATE TABLE IF NOT EXISTS pending_users (
         user_id INTEGER PRIMARY KEY,
         username TEXT,
         first_name TEXT,
